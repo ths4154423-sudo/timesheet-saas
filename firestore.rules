@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- מיפוי מנהל -> העסק שלו ----------
+    // כל מנהל יכול לקרוא רק את השורה של עצמו (כדי לדעת לאיזה עסק הוא שייך).
+    // הכתיבה חסומה כאן בכוונה - השורה נוצרת רק דרך תהליך ההרשמה הרשמי באפליקציה
+    // (setDoc אחד ספציפי מיד אחרי יצירת החשבון), לא נועדה להיכתב בשום דרך אחרת.
+    match /businessOwners/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+                     && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow update, delete: if false;
+    }
+
+    // ---------- פרופיל העסק עצמו ----------
+    // קריאה פתוחה לכולם בכוונה: עובד שמקבל קישור (?biz=...) צריך לוודא שהעסק קיים ולראות
+    // את שמו לפני שהוא בכלל מזוהה/מחובר. זה חושף רק את השם, לא נתונים רגישים.
+    match /businesses/{businessId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow update, delete: if isBusinessAdmin(businessId);
+    }
+
+    // ---------- כל שאר נתוני העסק (עובדים, שעות, בקשות, הגדרות, הודעות קוליות וכו') ----------
+    // זה הלב של ההפרדה בין עסקים: רק המנהל של העסק הזה או עובד מזוהה של העסק הזה
+    // יכולים לגעת בנתונים שתחת businesses/{businessId}/...
+    match /businesses/{businessId}/{document=**} {
+      allow read, write: if isBusinessAdmin(businessId) || isBusinessEmployee(businessId);
+    }
+
+    // ---------- מיפוי סשן אנונימי -> עובד ספציפי בעסק ספציפי ----------
+    // נוצר על ידי האפליקציה מיד אחרי אימות PIN מוצלח. create בלבד (לא update) כדי שעובד
+    // לא יוכל "לשנות" את עצמו להיות עובד אחר או בעסק אחר אחרי שהמסמך כבר נוצר.
+    match /employeeSessions/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+                     && request.auth.token.firebase.sign_in_provider == 'anonymous';
+      allow update, delete: if false;
+    }
+
+    // ---------- פונקציות עזר ----------
+    function isBusinessAdmin(businessId) {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && exists(/databases/$(database)/documents/businessOwners/$(request.auth.uid))
+        && get(/databases/$(database)/documents/businessOwners/$(request.auth.uid)).data.businessId == businessId;
+    }
+    function isBusinessEmployee(businessId) {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'anonymous'
+        && exists(/databases/$(database)/documents/employeeSessions/$(request.auth.uid))
+        && get(/databases/$(database)/documents/employeeSessions/$(request.auth.uid)).data.businessId == businessId;
+    }
+  }
+}
